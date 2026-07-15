@@ -20,7 +20,7 @@ UDP wire format: [protocol/PROTOCOL.md](protocol/PROTOCOL.md).
 | `protocol/` | `link_protocol.py` — single source of truth for the UDP packet + `PROTOCOL.md` |
 | `rpi_gateway/` | ground side: CRSF parser, UART reader → UDP sender, `setup_uart.sh`, systemd unit, tests |
 | `jetson_bridge/` | air side: UDP receiver, channel scaler, MAVLink sender, watchdog bridge, systemd unit, tests |
-| `tools/` | `crsf_replay.py` (synthetic CRSF without a radio), `latency_probe.py` (latency/loss) |
+| `tools/` | `crsf_monitor.py` (live decoded view of the UART), `crsf_replay.py` (synthetic CRSF without a radio), `latency_probe.py` (latency/loss) |
 | `tests/` | link-protocol unit tests, `integration/` loopback + manual SITL check |
 | `deploy/` | `deploy_rpi.sh`, `deploy_jetson.sh` — rsync + install over SSH |
 
@@ -93,6 +93,21 @@ sudo bash rpi_gateway/setup_uart.sh   # then: sudo reboot
 Enables PL011 (`enable_uart=1`, `dtoverlay=disable-bt`), removes the serial
 console from `cmdline.txt`, disables `hciuart`. After reboot the CRSF input
 is `/dev/ttyAMA0`.
+
+**Check the radio is actually being read** (turn on the Taranis first):
+
+```bash
+python3 tools/crsf_monitor.py          # live decoded 16 channels + rates
+python3 tools/crsf_monitor.py --us     # channels in microseconds
+python3 tools/crsf_monitor.py --raw    # hex sample, to debug wiring/baud
+```
+
+It's read-only (no UDP, no FC) and always shows the raw byte rate, so you
+can tell wiring problems (`bytes/s == 0`) from decode problems
+(`bytes/s > 0` but no frames — usually a baud mismatch). Move the sticks and
+watch the channel values change. Stop the `crsf-gateway` service first if it
+is running, since only one reader can hold the port:
+`sudo systemctl stop crsf-gateway`.
 
 ### FC / ArduPilot parameters (set by you; verify names for your vehicle/firmware)
 
