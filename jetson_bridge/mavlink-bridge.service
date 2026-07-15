@@ -1,0 +1,14 @@
+[Unit]
+Description=UDP to MAVLink RC bridge (air side)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/crsf-link
+ExecStart=/usr/bin/python3 -m jetson_bridge.bridge --config /opt/crsf-link/jetson_bridge/config.yaml
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,5 @@
+# Host-side development / running the full test suite
+pytest>=7.0
+pyserial>=3.5
+pymavlink>=2.4.30
+PyYAML>=5.3

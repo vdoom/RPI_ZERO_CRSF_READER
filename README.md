@@ -1,0 +1,205 @@
+# CRSF → WiFi → MAVLink RC bridge
+
+Carries RC control from a FrSky Taranis X9D+ to an ArduPilot flight
+controller over a regular WiFi network — no classic RC receiver on board.
+**16 channels end-to-end** (hard requirement), MAVLink 2 only.
+
+```
+[Taranis X9D+]                [RPi Zero 2 W]              [Jetson Orin Nano]           [FC / ArduPilot]
+  External RF = CRSF  --UART-->  crsf_gateway   --UDP/-->    mavlink_bridge   --MAVLink2-->  RC input
+  (module bay, 3.3V)   3.3V      (parse 16ch)     WiFi       (scale + override)   serial
+```
+
+Full specification: [project-passport.md](project-passport.md).
+UDP wire format: [protocol/PROTOCOL.md](protocol/PROTOCOL.md).
+
+## Repo layout
+
+| Path | Contents |
+|---|---|
+| `protocol/` | `link_protocol.py` — single source of truth for the UDP packet + `PROTOCOL.md` |
+| `rpi_gateway/` | ground side: CRSF parser, UART reader → UDP sender, `setup_uart.sh`, systemd unit, tests |
+| `jetson_bridge/` | air side: UDP receiver, channel scaler, MAVLink sender, watchdog bridge, systemd unit, tests |
+| `tools/` | `crsf_replay.py` (synthetic CRSF without a radio), `latency_probe.py` (latency/loss) |
+| `tests/` | link-protocol unit tests, `integration/` loopback + manual SITL check |
+| `deploy/` | `deploy_rpi.sh`, `deploy_jetson.sh` — rsync + install over SSH |
+
+## ⚠️ Safety model (read first)
+
+There is no physical RC receiver, so frame-loss RC failsafe is **not** the
+primary mechanism. Instead:
+
+- **Primary failsafe — GCS heartbeat.** The Jetson bridge sends `HEARTBEAT`
+  (as a GCS) *only while the end-to-end pilot link is alive*. If any link
+  breaks — Taranis→RPi (no CRSF), RPi→Jetson (no UDP), or the bridge dies —
+  the heartbeat stops and the FC enters **GCS failsafe**.
+- **Watchdog on the Jetson:** no fresh valid UDP packet for
+  `link_timeout_ms` (default **500 ms**) → stop sending both `HEARTBEAT`
+  and `RC_CHANNELS_OVERRIDE`; resume automatically when the stream recovers.
+- **Secondary backstop — `RC_OVERRIDE_TIME`** on the FC: stale overrides
+  expire after a few seconds even if something keeps a heartbeat alive.
+
+**Mandatory bench checks before any flight (props removed):**
+
+1. Kill WiFi → FC enters GCS failsafe within the timeout.
+2. Cut RPi power → same.
+3. Disconnect the signal wire from the Taranis → same.
+4. Kill each process (`crsf-gateway`, `mavlink-bridge`) in turn → same.
+5. Confirm the FC failsafe *action* (RTL/Land/…) is the one you configured.
+
+> Home WiFi is fine for development and the bench. Real flight requires a
+> separate assessment of range, reliability and local regulations — out of
+> scope here.
+
+## Hardware wiring
+
+### Taranis → RPi Zero 2 W
+
+CRSF from the module bay is non-inverted UART, 8N1, 3.0–3.3 V — direct to
+GPIO, no level shifter. Only RX + GND are needed:
+
+- Taranis **PPM (signal)** → RPi **GPIO15 / RXD** (physical pin 10)
+- Taranis **GND** → RPi **GND** (physical pin 6)
+- ⚠️ The **BATT** contact in the bay is ~8.3 V — **never** to a GPIO (kills
+  the Pi). Verify with a multimeter which pin is PPM and which is BATT
+  before soldering.
+- The RPi has its **own 5 V USB supply**; only GND is shared with the radio.
+
+### Jetson → FC
+
+UART (as configured): Jetson `/dev/ttyTHS1` ↔ FC TELEM port — TX↔RX,
+RX↔TX, shared GND. `mavlink_baud` (default 921600) must match
+`SERIALx_BAUD`. USB (`/dev/ttyACM0`) also works — just change
+`mavlink_device` in `jetson_bridge/config.yaml`.
+
+> The deploy script disables `nvgetty` (the serial console that JetPack
+> puts on `/dev/ttyTHS1`).
+
+### Radio (EdgeTX/OpenTX)
+
+Model settings → External RF → Mode **CRSF**, baud **921600** (must match
+`baud` in `rpi_gateway/config.yaml`; the standard 416666 also works —
+pyserial sets custom baud rates on Linux — but 921600 is a native Linux
+rate and is the configured default).
+
+## Device setup
+
+### RPi Zero 2 W — UART
+
+```bash
+sudo bash rpi_gateway/setup_uart.sh   # then: sudo reboot
+```
+
+Enables PL011 (`enable_uart=1`, `dtoverlay=disable-bt`), removes the serial
+console from `cmdline.txt`, disables `hciuart`. After reboot the CRSF input
+is `/dev/ttyAMA0`.
+
+### FC / ArduPilot parameters (set by you; verify names for your vehicle/firmware)
+
+| Parameter | Value | Why |
+|---|---|---|
+| `SERIALx_PROTOCOL` | `2` (MAVLink2) | port wired to the Jetson |
+| `SERIALx_BAUD` | `921` | match `mavlink_baud` |
+| `SYSID_MYGCS` | `255` | must equal `source_system` of the bridge, or overrides are silently ignored |
+| `FS_GCS_ENABLE` | `1` (+ chosen action) | **primary failsafe**; pick RTL/Land/… for your vehicle |
+| `RC_OVERRIDE_TIME` | e.g. `3` s | backstop for stale overrides |
+| `RCx_MIN/MAX/TRIM` | 988 / 2012 / 1500 | or run RC calibration while the bridge streams sticks |
+| `ARMING_CHECK` | reviewed consciously | without a physical RX some RC checks complain — understand each one you relax, don't disable wholesale |
+
+## Deploy (over SSH)
+
+```bash
+# ground side (add --with-uart-setup on first deploy, then reboot the Pi)
+RPI_HOST=pi@192.168.1.10 ./deploy/deploy_rpi.sh [--with-uart-setup] [--run-tests]
+
+# air side
+JETSON_HOST=user@192.168.1.20 ./deploy/deploy_jetson.sh [--run-tests]
+```
+
+Both scripts rsync the code to `/opt/crsf-link` (override with
+`INSTALL_DIR`), install dependencies, install + enable the systemd service,
+and never overwrite an already-edited `config.yaml` on the device.
+
+Logs: `journalctl -u crsf-gateway -f` / `journalctl -u mavlink-bridge -f`.
+
+## Configuration
+
+Static IPs are assumed (adjust to your LAN):
+`rpi_gateway/config.yaml` → `udp_target_ip` = Jetson's IP;
+`jetson_bridge/config.yaml` listens on `0.0.0.0:14650`.
+
+Every key can be overridden per-run with an environment variable:
+`CRSF_GW_<KEY>` for the gateway, `MAV_BRIDGE_<KEY>` for the bridge, e.g.
+`CRSF_GW_SERIAL_PORT=/dev/pts/5`, `MAV_BRIDGE_MAVLINK_DEVICE=udpout:127.0.0.1:14550`.
+
+Key defaults: baud **921600**, UDP port **14650**, override rate **50 Hz**,
+heartbeat **1 Hz**, watchdog **500 ms**, clamp **988..2012 µs**.
+
+## Testing
+
+### Level 1 — unit (no hardware; host, or on-device)
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest -q
+```
+
+Covers: CRC8 DVB-S2 known answers, channel pack↔unpack round-trip, parser
+resync on garbage/bad CRC/split frames, UDP packet encode↔decode, scaling
+anchors (172→988, 992→1500, 1811→2012), seq loss detection,
+`RC_CHANNELS_OVERRIDE` build→decode with 16 channels in MAVLink2.
+
+### Level 2 — loopback, no radio and no FC
+
+Host-only chain test (also part of the pytest run):
+`tests/integration/test_loopback.py`.
+
+With processes, on one Linux box or across RPi + Jetson over real WiFi:
+
+```bash
+# terminal 1: fake radio -> prints a PTY path
+python tools/crsf_replay.py --pty --pattern sweep
+
+# terminal 2: gateway reading from the PTY
+CRSF_GW_SERIAL_PORT=/dev/pts/N CRSF_GW_UDP_TARGET_IP=<jetson-ip> \
+    python3 -m rpi_gateway.crsf_reader
+
+# terminal 3 (on the Jetson, bridge stopped): measure loss + latency
+python tools/latency_probe.py tap --port 14650 --duration 30
+
+# clock-independent network RTT between the devices:
+python tools/latency_probe.py echo-server --port 14651   # on Jetson
+python tools/latency_probe.py rtt --target <jetson-ip>:14651  # on RPi
+```
+
+> `t_us`-based absolute latency is only valid when sender and receiver share
+> a clock (same host). Across devices use the RTT mode (one-way ≈ RTT/2) or
+> the "relative" jitter numbers.
+
+### Level 3 — ArduPilot SITL
+
+```bash
+sim_vehicle.py -v ArduCopter --console          # SITL on udp:127.0.0.1:14550
+python tests/integration/sitl_check.py --conn udpout:127.0.0.1:14550
+```
+
+Verifies the FC sees all 16 commanded channels via `RC_CHANNELS`, then stops
+sending so you can watch the GCS failsafe fire. The bridge itself can also be
+pointed at SITL: `MAV_BRIDGE_MAVLINK_DEVICE=udpout:127.0.0.1:14550 python3 -m jetson_bridge.bridge`.
+
+### Level 4 — bench with real hardware (manual, props removed)
+
+Real Taranis → RPi → Jetson → FC. In Mission Planner's RC-calibration screen
+verify **all 16 channels** move correctly, then run the failsafe checklist
+from the Safety section.
+
+## Known caveats
+
+- The `0` / `UINT16_MAX` ("ignore" / "release") semantics for extension
+  channels 9–18 of `RC_CHANNELS_OVERRIDE` must be **verified against the
+  current `common.xml` and on SITL** — the bridge sends chan17/18 = 0.
+- ArduPilot parameter names/ranges differ slightly between Copter, Plane and
+  Rover — check the docs for your firmware version.
+- The gateway sends one UDP packet per CRSF frame, so the packet rate
+  follows the radio (typically 50–150 Hz); the bridge downsamples to
+  `override_rate_hz`.

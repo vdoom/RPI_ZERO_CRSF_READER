@@ -1,0 +1,13 @@
+# CRSF gateway configuration (Raspberry Pi Zero 2 W, ground side).
+# Every key can be overridden by an environment variable CRSF_GW_<KEY_UPPERCASE>.
+
+serial_port: /dev/ttyAMA0     # PL011 UART (requires setup_uart.sh + reboot)
+baud: 921600                  # must match Taranis External RF CRSF baud rate
+accept_sync_bytes: [0xEE, 0xC8]  # EdgeTX transmitter output + CRSF standard
+
+udp_target_ip: 192.168.1.20   # static IP of the Jetson - adjust to your LAN
+udp_target_port: 14650
+
+log_level: INFO
+stats_interval_s: 5.0
+serial_retry_delay_s: 2.0

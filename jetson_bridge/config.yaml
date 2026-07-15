@@ -1,0 +1,24 @@
+# MAVLink bridge configuration (Jetson Orin Nano, air side).
+# Every key can be overridden by an environment variable MAV_BRIDGE_<KEY_UPPERCASE>.
+
+udp_listen_ip: 0.0.0.0
+udp_listen_port: 14650
+
+mavlink_device: /dev/ttyTHS1  # Jetson GPIO UART to FC TELEM port
+mavlink_baud: 921600          # must match SERIALx_BAUD on the FC
+
+source_system: 255            # must equal SYSID_MYGCS on the FC
+source_component: 190
+
+num_channels: 16              # fixed by the link protocol
+override_rate_hz: 50.0
+heartbeat_rate_hz: 1.0
+link_timeout_ms: 500          # watchdog: stop HEARTBEAT + overrides after this
+
+us_min: 988                   # clamp for scaled channel values
+us_max: 2012
+
+log_level: INFO
+stats_interval_s: 5.0
+fc_connect_timeout_s: 10.0
+fc_retry_delay_s: 2.0
