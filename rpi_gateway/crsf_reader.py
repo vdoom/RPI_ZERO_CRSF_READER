@@ -44,7 +44,7 @@ DEFAULTS = {
     "baud": 921600,
     "accept_sync_bytes": list(DEFAULT_SYNC_BYTES),
     "spi_device": "/dev/spidev0.0",
-    "spi_speed_hz": 0,  # 0 = auto: 10x baud (crsf_spi) / 1 MHz (sbus_spi)
+    "spi_speed_hz": 0,  # 0 = auto: 10x baud capped at 4 MHz (crsf_spi) / 1 MHz (sbus_spi)
     "spi_inverted": True,
     "udp_target_ip": "192.168.1.20",
     "udp_target_port": 14650,
@@ -171,7 +171,10 @@ class CrsfSpiSource(_SpiSourceBase):
 
     def __init__(self, cfg: dict, sampler=None):
         baud = int(cfg["baud"])
-        super().__init__(cfg, baud=baud, default_speed=baud * 10,
+        # 10x oversampling, capped: the Pi Zero 2 W cannot sample reliably
+        # above ~4 MHz (9.2 Msps for 921600 baud decodes nothing at all).
+        super().__init__(cfg, baud=baud,
+                         default_speed=min(baud * 10, 4_000_000),
                          parity=None, stop_bits=1, sampler=sampler)
         self._parser = CrsfParser(accept_addresses=cfg["accept_sync_bytes"])
 
