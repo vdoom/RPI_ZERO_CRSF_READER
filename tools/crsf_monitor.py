@@ -28,7 +28,14 @@ import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-from jetson_bridge.channel_scaler import scale_channels  # noqa: E402
+try:
+    from jetson_bridge.channel_scaler import scale_channels  # noqa: E402
+except ModuleNotFoundError:
+    # Ground-side installs don't ship jetson_bridge; same anchors as
+    # jetson_bridge.channel_scaler (172/992/1811 -> 988/1500/2012 us).
+    def scale_channels(channels, us_min=988, us_max=2012):
+        return [max(us_min, min(us_max, int(round((v - 992) * 5 / 8 + 1500))))
+                for v in channels]
 from rpi_gateway.crsf_parser import (  # noqa: E402
     DEFAULT_SYNC_BYTES,
     FRAME_TYPE_RC_CHANNELS_PACKED,

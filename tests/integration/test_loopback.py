@@ -8,9 +8,12 @@ import socket
 
 import pytest
 
+# The loopback chain exercises both sides; single-side deploys
+# (deploy_rpi.sh / deploy_jetson.sh) stage only one package, so skip there.
 pytest.importorskip(
-    "jetson_bridge", reason="air-side package not present on this host "
-    "(ground-side deploys stage only protocol/rpi_gateway/tools)")
+    "jetson_bridge", reason="air-side package not present on this host")
+pytest.importorskip(
+    "rpi_gateway", reason="ground-side package not present on this host")
 
 from jetson_bridge.channel_scaler import crsf_to_us, scale_channels  # noqa: E402
 from jetson_bridge.udp_receiver import UdpReceiver  # noqa: E402

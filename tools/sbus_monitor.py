@@ -30,14 +30,13 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import numpy as np  # noqa: E402
 
-from jetson_bridge.channel_scaler import scale_channels  # noqa: E402
 from rpi_gateway.sbus_decoder import (  # noqa: E402
     SBUS_BAUD,
     SbusFramer,
     SoftUartDecoder,
     SpiSampler,
 )
-from tools.crsf_monitor import _draw  # noqa: E402
+from tools.crsf_monitor import _draw, scale_channels  # noqa: E402
 
 
 def line_activity(chunk: bytes) -> float:
