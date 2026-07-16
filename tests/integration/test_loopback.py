@@ -8,9 +8,13 @@ import socket
 
 import pytest
 
-from jetson_bridge.channel_scaler import crsf_to_us, scale_channels
-from jetson_bridge.udp_receiver import UdpReceiver
-from protocol import link_protocol
+pytest.importorskip(
+    "jetson_bridge", reason="air-side package not present on this host "
+    "(ground-side deploys stage only protocol/rpi_gateway/tools)")
+
+from jetson_bridge.channel_scaler import crsf_to_us, scale_channels  # noqa: E402
+from jetson_bridge.udp_receiver import UdpReceiver  # noqa: E402
+from protocol import link_protocol  # noqa: E402
 from rpi_gateway.crsf_parser import (
     FRAME_TYPE_RC_CHANNELS_PACKED,
     CrsfParser,
