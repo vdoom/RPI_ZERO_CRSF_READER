@@ -6,8 +6,8 @@ controller over a regular WiFi network — no classic RC receiver on board.
 
 ```
 [Taranis X9D+]                [RPi Zero 2 W]              [Jetson Orin Nano]           [FC / ArduPilot]
-  External RF = CRSF  --UART-->  crsf_gateway   --UDP/-->    mavlink_bridge   --MAVLink2-->  RC input
-  (module bay, 3.3V)   3.3V      (parse 16ch)     WiFi       (scale + override)   serial
+  External RF = SBUS  --SPI--->  crsf_gateway   --UDP/-->    mavlink_bridge   --MAVLink2-->  RC input
+  (module bay, inverted) 3.3V    (decode 16ch)    WiFi       (scale + override)   serial
 ```
 
 Full specification: [project-passport.md](project-passport.md).
@@ -55,13 +55,12 @@ primary mechanism. Instead:
 
 ### Taranis/RadioMaster → RPi Zero 2 W
 
-**Measured reality (Taranis Q X7, RadioMaster TX15):** with External RF =
-CRSF, the radio emits CRSF on the module bay's bottom **S.Port pin — but
-INVERTED** (idle low, ~0.13 V on a voltmeter). The PPM pin stays silent.
-The Pi's hardware UART cannot read an inverted signal, so the gateway
-samples the pin with the **SPI peripheral** and decodes the UART waveform
-in software (`input_mode: crsf_spi`, see below). No level shifter, no
-inverter hardware needed:
+**Measured reality (working setup):** with External RF = **SBUS**, the
+radio emits **inverted SBUS** on the module bay's bottom **S.Port pin**
+(idle low). The Pi's hardware UART cannot read an inverted signal, so the
+gateway samples the pin with the **SPI peripheral** and decodes the UART
+waveform in software (`input_mode: sbus_spi` — the default). No level
+shifter, no inverter hardware needed:
 
 - Radio bay **S.Port pin (bottom)** → RPi **GPIO9 / SPI-MISO (physical pin 21)**
 - Radio **GND** → RPi **GND** (physical pin 6)
@@ -72,9 +71,12 @@ inverter hardware needed:
 - The RPi has its **own 5 V USB supply**; only GND is shared with the radio.
 - SPI must be enabled: `dtparam=spi=on` in `/boot/firmware/config.txt`.
 
-If your radio outputs *non-inverted* CRSF (verify: the signal pin idles at
-~3.3 V), the classic hookup works instead: signal → pin 10, and
-`input_mode: crsf_uart` (requires `setup_uart.sh` + reboot).
+Alternative modes, same wiring: if your radio emits *inverted CRSF* on the
+S.Port pin (External RF = CRSF on some Taranis/RadioMaster firmwares), use
+`input_mode: crsf_spi` with `baud` matching the radio. If it outputs
+*non-inverted* CRSF (verify: the signal pin idles at ~3.3 V), the classic
+hookup works instead: signal → pin 10, and `input_mode: crsf_uart`
+(requires `setup_uart.sh` + reboot).
 
 **Identify what your pin actually speaks** (SBUS / inverted CRSF /
 non-inverted CRSF / S.Port telemetry) with one command:
@@ -95,14 +97,39 @@ RX↔TX, shared GND. `mavlink_baud` (default 921600) must match
 
 ### Radio (EdgeTX/OpenTX)
 
-Model settings → External RF → Mode **CRSF**, baud **921600** (must match
-`baud` in `rpi_gateway/config.yaml`; the standard 416666 also works —
-pyserial sets custom baud rates on Linux — but 921600 is a native Linux
-rate and is the configured default).
+Model settings → External RF → Mode **SBUS** (the verified working mode).
+SBUS runs at a fixed 100000 baud 8E2, so there is nothing to match on the
+radio; the `baud` key in `rpi_gateway/config.yaml` applies only to the
+`crsf_*` input modes.
+
+After changing endpoints/trims on the radio, verify full stick travel with
+`tools/sbus_monitor.py`: the Jetson scaler assumes min/mid/max ≈
+**172 / 992 / 1811** (→ 988/1500/2012 µs). Adjust the radio's endpoints if
+your values differ noticeably — FC RC calibration absorbs small offsets.
 
 ## Device setup
 
-### RPi Zero 2 W — UART
+### RPi Zero 2 W — SPI (default `sbus_spi`, also `crsf_spi`)
+
+Enable the SPI peripheral once — `dtparam=spi=on` in
+`/boot/firmware/config.txt` (or `sudo raspi-config` → Interface Options →
+SPI) — then reboot.
+
+**Check the radio is actually being read** (turn on the radio first):
+
+```bash
+python3 tools/sbus_monitor.py --scan   # identify what the pin speaks
+python3 tools/sbus_monitor.py          # live decoded 16 channels + rates
+python3 tools/sbus_monitor.py --us     # channels in microseconds
+```
+
+It's read-only (no UDP, no FC), so you can tell wiring problems from decode
+problems. Move the sticks and watch the channel values change, and check
+the min/mid/max endpoints (see the Radio section above). Stop the
+`crsf-gateway` service first if it is running, since only one reader can
+hold the SPI device: `sudo systemctl stop crsf-gateway`.
+
+### RPi Zero 2 W — UART (only for `crsf_uart` mode)
 
 ```bash
 sudo bash rpi_gateway/setup_uart.sh   # then: sudo reboot
@@ -110,22 +137,8 @@ sudo bash rpi_gateway/setup_uart.sh   # then: sudo reboot
 
 Enables PL011 (`enable_uart=1`, `dtoverlay=disable-bt`), removes the serial
 console from `cmdline.txt`, disables `hciuart`. After reboot the CRSF input
-is `/dev/ttyAMA0`.
-
-**Check the radio is actually being read** (turn on the Taranis first):
-
-```bash
-python3 tools/crsf_monitor.py          # live decoded 16 channels + rates
-python3 tools/crsf_monitor.py --us     # channels in microseconds
-python3 tools/crsf_monitor.py --raw    # hex sample, to debug wiring/baud
-```
-
-It's read-only (no UDP, no FC) and always shows the raw byte rate, so you
-can tell wiring problems (`bytes/s == 0`) from decode problems
-(`bytes/s > 0` but no frames — usually a baud mismatch). Move the sticks and
-watch the channel values change. Stop the `crsf-gateway` service first if it
-is running, since only one reader can hold the port:
-`sudo systemctl stop crsf-gateway`.
+is `/dev/ttyAMA0`. Check it with `python3 tools/crsf_monitor.py`
+(`--us` for microseconds, `--raw` for a hex sample to debug wiring/baud).
 
 ### FC / ArduPilot parameters (set by you; verify names for your vehicle/firmware)
 
@@ -142,7 +155,8 @@ is running, since only one reader can hold the port:
 ## Deploy (over SSH)
 
 ```bash
-# ground side (add --with-uart-setup on first deploy, then reboot the Pi)
+# ground side (--with-uart-setup only for crsf_uart mode; the default
+# sbus_spi mode needs SPI enabled instead, see Device setup)
 RPI_HOST=pi@192.168.1.10 ./deploy/deploy_rpi.sh [--with-uart-setup] [--run-tests]
 
 # air side
@@ -165,8 +179,9 @@ Every key can be overridden per-run with an environment variable:
 `CRSF_GW_<KEY>` for the gateway, `MAV_BRIDGE_<KEY>` for the bridge, e.g.
 `CRSF_GW_SERIAL_PORT=/dev/pts/5`, `MAV_BRIDGE_MAVLINK_DEVICE=udpout:127.0.0.1:14550`.
 
-Key defaults: baud **921600**, UDP port **14650**, override rate **50 Hz**,
-heartbeat **1 Hz**, watchdog **500 ms**, clamp **988..2012 µs**.
+Key defaults: input **sbus_spi** (SBUS, fixed 100000 baud), UDP port
+**14650**, override rate **50 Hz**, heartbeat **1 Hz**, watchdog
+**500 ms**, clamp **988..2012 µs**.
 
 ## Testing
 

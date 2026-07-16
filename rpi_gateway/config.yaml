@@ -2,13 +2,15 @@
 # Every key can be overridden by an environment variable CRSF_GW_<KEY_UPPERCASE>.
 
 # How the radio is connected:
+#   sbus_spi  - INVERTED SBUS sampled on SPI MISO (phys pin 21) - this is
+#               what the module-bay S.Port (bottom) pin emits with
+#               External RF = SBUS; the verified working mode
+#   crsf_spi  - inverted CRSF sampled on SPI MISO (phys pin 21), for radios
+#               that emit CRSF on the S.Port pin (External RF = CRSF)
 #   crsf_uart - non-inverted CRSF on the PL011 UART (phys pin 10)
-#   crsf_spi  - INVERTED CRSF sampled on SPI MISO (phys pin 21) - this is
-#               what the Taranis/RadioMaster module-bay S.Port pin emits
-#   sbus_spi  - inverted SBUS sampled on SPI MISO (phys pin 21)
-input_mode: crsf_spi
+input_mode: sbus_spi
 
-baud: 400000                  # must match the radio's CRSF baud setting
+baud: 400000                  # crsf_* modes only; SBUS is fixed at 100000 8E2
 accept_sync_bytes: [0xEE, 0xC8]  # EdgeTX transmitter output + CRSF standard
 
 # crsf_uart mode only:
