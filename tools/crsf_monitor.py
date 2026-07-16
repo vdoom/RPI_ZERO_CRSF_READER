@@ -58,6 +58,57 @@ def _draw(lines, first):
     sys.stdout.flush()
 
 
+# CRSF/serial bauds worth trying. Above ~3 Mbaud the Pi PL011 cannot lock at
+# the default UART clock, so we stop there. 100000 is included only to notice
+# a radio that is actually emitting SBUS rather than CRSF.
+SCAN_BAUDS = [115200, 200000, 250000, 400000, 416666, 420000, 460800,
+              921600, 1000000, 1870000, 100000]
+
+
+def run_scan(port, dwell):
+    import serial
+    print(f"scanning bauds on {port} ({dwell:.1f}s each) - radio must be ON "
+          f"and transmitting\n")
+    print(f"{'baud':>9} | {'bytes/s':>8} | {'frames':>7} | {'crc_err':>7} | "
+          f"verdict")
+    print("-" * 60)
+    best = (None, 0)
+    for baud in SCAN_BAUDS:
+        try:
+            ser = serial.Serial(port, baud, timeout=0.05)
+        except (serial.SerialException, OSError, ValueError) as exc:
+            print(f"{baud:>9} |  (cannot open at this baud: {exc})")
+            continue
+        parser = CrsfParser()
+        ser.reset_input_buffer()
+        total = 0
+        deadline = time.monotonic() + dwell
+        while time.monotonic() < deadline:
+            data = ser.read(512)
+            total += len(data)
+            parser.feed(data)
+        ser.close()
+        frames = parser.stats.frames_ok
+        verdict = "*** DECODES ***" if frames > 0 else ""
+        print(f"{baud:>9} | {total / dwell:8.0f} | {frames:7d} | "
+              f"{parser.stats.crc_errors:7d} | {verdict}")
+        if frames > best[1]:
+            best = (baud, frames)
+
+    print()
+    if best[1] > 0:
+        print(f"==> Use baud {best[0]} - it produced {best[1]} valid CRSF "
+              f"frames.\n    Set 'baud: {best[0]}' in rpi_gateway/config.yaml, "
+              f"or run the monitor with -b {best[0]}.")
+    else:
+        print("==> No baud produced a valid CRSF frame. Likely causes:\n"
+              "    - the pin is emitting SBUS (100000 baud, 8E2, INVERTED),\n"
+              "      not CRSF - the Pi UART can't read inverted SBUS without a\n"
+              "      hardware inverter; switch the radio's output to real CRSF;\n"
+              "    - or the radio's CRSF baud is above ~3 Mbaud (unreadable on\n"
+              "      the Pi) - lower it in the radio's CRSF baud setting.")
+
+
 def run_decoded(ser, port, baud, show_us):
     parser = CrsfParser()
     total_bytes = 0
@@ -149,7 +200,15 @@ def main():
                     help="show channels in microseconds instead of raw 0..2047")
     ap.add_argument("--raw", action="store_true",
                     help="hex-dump the byte stream instead of decoding")
+    ap.add_argument("--scan", action="store_true",
+                    help="sweep candidate bauds and report which one decodes")
+    ap.add_argument("--dwell", type=float, default=1.5,
+                    help="seconds to sample each baud in --scan (default 1.5)")
     args = ap.parse_args()
+
+    if args.scan:
+        run_scan(args.port, args.dwell)
+        return 0
 
     ser = open_serial(args.port, args.baud)
     try:

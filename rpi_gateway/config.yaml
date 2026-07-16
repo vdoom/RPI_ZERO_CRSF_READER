@@ -1,9 +1,23 @@
 # CRSF gateway configuration (Raspberry Pi Zero 2 W, ground side).
 # Every key can be overridden by an environment variable CRSF_GW_<KEY_UPPERCASE>.
 
-serial_port: /dev/ttyAMA0     # PL011 UART (requires setup_uart.sh + reboot)
-baud: 921600                  # must match Taranis External RF CRSF baud rate
+# How the radio is connected:
+#   crsf_uart - non-inverted CRSF on the PL011 UART (phys pin 10)
+#   crsf_spi  - INVERTED CRSF sampled on SPI MISO (phys pin 21) - this is
+#               what the Taranis/RadioMaster module-bay S.Port pin emits
+#   sbus_spi  - inverted SBUS sampled on SPI MISO (phys pin 21)
+input_mode: crsf_spi
+
+baud: 400000                  # must match the radio's CRSF baud setting
 accept_sync_bytes: [0xEE, 0xC8]  # EdgeTX transmitter output + CRSF standard
+
+# crsf_uart mode only:
+serial_port: /dev/ttyAMA0     # PL011 UART (requires setup_uart.sh + reboot)
+
+# *_spi modes only:
+spi_device: /dev/spidev0.0    # requires dtparam=spi=on
+spi_speed_hz: 0               # 0 = auto (10x baud for crsf_spi, 1 MHz for sbus_spi)
+spi_inverted: true
 
 udp_target_ip: 192.168.1.20   # static IP of the Jetson - adjust to your LAN
 udp_target_port: 14650

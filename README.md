@@ -18,9 +18,9 @@ UDP wire format: [protocol/PROTOCOL.md](protocol/PROTOCOL.md).
 | Path | Contents |
 |---|---|
 | `protocol/` | `link_protocol.py` — single source of truth for the UDP packet + `PROTOCOL.md` |
-| `rpi_gateway/` | ground side: CRSF parser, UART reader → UDP sender, `setup_uart.sh`, systemd unit, tests |
+| `rpi_gateway/` | ground side: CRSF parser, SBUS/soft-UART SPI decoder, reader → UDP sender, `setup_uart.sh`, systemd unit, tests |
 | `jetson_bridge/` | air side: UDP receiver, channel scaler, MAVLink sender, watchdog bridge, systemd unit, tests |
-| `tools/` | `crsf_monitor.py` (live decoded view of the UART), `crsf_replay.py` (synthetic CRSF without a radio), `latency_probe.py` (latency/loss) |
+| `tools/` | `crsf_monitor.py` (live view, hardware UART), `sbus_monitor.py` (live view + protocol `--scan`, SPI-sampled inverted signals), `crsf_replay.py` (synthetic CRSF without a radio), `latency_probe.py` (latency/loss) |
 | `tests/` | link-protocol unit tests, `integration/` loopback + manual SITL check |
 | `deploy/` | `deploy_rpi.sh`, `deploy_jetson.sh` — rsync + install over SSH |
 
@@ -53,17 +53,35 @@ primary mechanism. Instead:
 
 ## Hardware wiring
 
-### Taranis → RPi Zero 2 W
+### Taranis/RadioMaster → RPi Zero 2 W
 
-CRSF from the module bay is non-inverted UART, 8N1, 3.0–3.3 V — direct to
-GPIO, no level shifter. Only RX + GND are needed:
+**Measured reality (Taranis Q X7, RadioMaster TX15):** with External RF =
+CRSF, the radio emits CRSF on the module bay's bottom **S.Port pin — but
+INVERTED** (idle low, ~0.13 V on a voltmeter). The PPM pin stays silent.
+The Pi's hardware UART cannot read an inverted signal, so the gateway
+samples the pin with the **SPI peripheral** and decodes the UART waveform
+in software (`input_mode: crsf_spi`, see below). No level shifter, no
+inverter hardware needed:
 
-- Taranis **PPM (signal)** → RPi **GPIO15 / RXD** (physical pin 10)
-- Taranis **GND** → RPi **GND** (physical pin 6)
-- ⚠️ The **BATT** contact in the bay is ~8.3 V — **never** to a GPIO (kills
-  the Pi). Verify with a multimeter which pin is PPM and which is BATT
-  before soldering.
+- Radio bay **S.Port pin (bottom)** → RPi **GPIO9 / SPI-MISO (physical pin 21)**
+- Radio **GND** → RPi **GND** (physical pin 6)
+- ⚠️ The **BATT** contact in the bay is ~7.5–8.3 V — **never** to a GPIO
+  (kills the Pi). Verify pins with a multimeter first: BATT reads ~7.5 V,
+  GND beeps to chassis, the inverted signal pin reads ~0.1–1 V while
+  transmitting.
 - The RPi has its **own 5 V USB supply**; only GND is shared with the radio.
+- SPI must be enabled: `dtparam=spi=on` in `/boot/firmware/config.txt`.
+
+If your radio outputs *non-inverted* CRSF (verify: the signal pin idles at
+~3.3 V), the classic hookup works instead: signal → pin 10, and
+`input_mode: crsf_uart` (requires `setup_uart.sh` + reboot).
+
+**Identify what your pin actually speaks** (SBUS / inverted CRSF /
+non-inverted CRSF / S.Port telemetry) with one command:
+
+```bash
+python3 tools/sbus_monitor.py --scan
+```
 
 ### Jetson → FC
 
