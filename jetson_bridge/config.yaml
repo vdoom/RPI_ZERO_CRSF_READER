@@ -5,7 +5,7 @@ udp_listen_ip: 0.0.0.0
 udp_listen_port: 14650
 
 mavlink_device: /dev/ttyTHS1  # Jetson GPIO UART to FC TELEM port
-mavlink_baud: 921600          # must match SERIALx_BAUD on the FC
+mavlink_baud: 1500000         # must match SERIALx_BAUD on the FC (1500 = 1.5 M)
 
 source_system: 255            # must equal SYSID_MYGCS on the FC
 source_component: 190

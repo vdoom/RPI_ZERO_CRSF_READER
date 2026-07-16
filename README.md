@@ -88,8 +88,9 @@ python3 tools/sbus_monitor.py --scan
 ### Jetson → FC
 
 UART (as configured): Jetson `/dev/ttyTHS1` ↔ FC TELEM port — TX↔RX,
-RX↔TX, shared GND. `mavlink_baud` (default 921600) must match
-`SERIALx_BAUD`. USB (`/dev/ttyACM0`) also works — just change
+RX↔TX, shared GND. `mavlink_baud` (default **1500000**, because this
+bench's FC port is shared with another project that needs 1.5 M) must
+match `SERIALx_BAUD`. USB (`/dev/ttyACM0`) also works — just change
 `mavlink_device` in `jetson_bridge/config.yaml`.
 
 > The deploy script disables `nvgetty` (the serial console that JetPack
@@ -145,7 +146,7 @@ is `/dev/ttyAMA0`. Check it with `python3 tools/crsf_monitor.py`
 | Parameter | Value | Why |
 |---|---|---|
 | `SERIALx_PROTOCOL` | `2` (MAVLink2) | port wired to the Jetson |
-| `SERIALx_BAUD` | `921` | match `mavlink_baud` |
+| `SERIALx_BAUD` | `1500` | match `mavlink_baud` (1.5 M as configured) |
 | `SYSID_MYGCS` | `255` | must equal `source_system` of the bridge, or overrides are silently ignored |
 | `FS_GCS_ENABLE` | `1` (+ chosen action) | **primary failsafe**; pick RTL/Land/… for your vehicle |
 | `RC_OVERRIDE_TIME` | e.g. `3` s | backstop for stale overrides |
