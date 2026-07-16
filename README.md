@@ -20,7 +20,7 @@ UDP wire format: [protocol/PROTOCOL.md](protocol/PROTOCOL.md).
 | `protocol/` | `link_protocol.py` — single source of truth for the UDP packet + `PROTOCOL.md` |
 | `rpi_gateway/` | ground side: CRSF parser, SBUS/soft-UART SPI decoder, reader → UDP sender, `setup_uart.sh`, systemd unit, tests |
 | `jetson_bridge/` | air side: UDP receiver, channel scaler, MAVLink sender, watchdog bridge, systemd unit, tests |
-| `tools/` | `crsf_monitor.py` (live view, hardware UART), `sbus_monitor.py` (live view + protocol `--scan`, SPI-sampled inverted signals), `crsf_replay.py` (synthetic CRSF without a radio), `latency_probe.py` (latency/loss) |
+| `tools/` | `crsf_monitor.py` (live view, hardware UART), `sbus_monitor.py` (live view + protocol `--scan`, SPI-sampled inverted signals), `crsf_replay.py` (synthetic CRSF without a radio), `latency_probe.py` (latency/loss), `mock_fc.py` (stand-in FC for live bridge tests) |
 | `tests/` | link-protocol unit tests, `integration/` loopback + manual SITL check |
 | `deploy/` | `deploy_rpi.sh`, `deploy_jetson.sh` — rsync + install over SSH |
 
@@ -224,6 +224,17 @@ python tools/latency_probe.py rtt --target <jetson-ip>:14651  # on RPi
 > a clock (same host). Across devices use the RTT mode (one-way ≈ RTT/2) or
 > the "relative" jitter numbers.
 
+No FC on the bench yet? Run the real bridge against a mock FC on the
+Jetson — verifies heartbeat, 50 Hz overrides, 16-channel scaling and
+chan17/18 = 0 with live radio input:
+
+```bash
+# terminal 1 (Jetson): the bridge, pointed at a local UDP "FC"
+MAV_BRIDGE_MAVLINK_DEVICE=udpin:0.0.0.0:14551 python3 -m jetson_bridge.bridge
+# terminal 2 (Jetson): mock FC - sends HEARTBEAT, reports what it receives
+python3 tools/mock_fc.py --conn udpout:127.0.0.1:14551 --duration 30
+```
+
 ### Level 3 — ArduPilot SITL
 
 ```bash
@@ -240,6 +251,23 @@ pointed at SITL: `MAV_BRIDGE_MAVLINK_DEVICE=udpout:127.0.0.1:14550 python3 -m je
 Real Taranis → RPi → Jetson → FC. In Mission Planner's RC-calibration screen
 verify **all 16 channels** move correctly, then run the failsafe checklist
 from the Safety section.
+
+## Measured performance (bench, 2026-07-16)
+
+RPi Zero 2 W (`crsf_spi` @ 921600, 4 Msps SPI) → home WiFi → Jetson Orin
+Nano, real Taranis input:
+
+| Metric | Value |
+|---|---|
+| Gateway output | 185–190 valid pkt/s (~4 % of frames CRC-dropped by the soft-UART decode, never forwarded) |
+| UDP loss (30 s tap) | **0** / 5570 packets, 0 out-of-order |
+| UDP jitter (relative) | p50 0.7 ms, p95 3.0 ms, max 23 ms |
+| Pi↔Jetson UDP RTT (100 Hz, 10 s) | p50 3.5 ms, p95 6.8 ms → one-way ≈ 1.7 ms |
+| Bridge → mock FC | `RC_CHANNELS_OVERRIDE` 50.1 Hz, `HEARTBEAT` 1 Hz, 16 ch scaled, chan17/18 = 0, sysid 255 |
+
+The SPI sample rate matters: at 921600 baud, 4 MHz decodes best — 8 MHz
+doubles the CRC error rate and the "natural" 10×-baud 9.2 MHz decodes
+nothing (hence the 4 MHz cap in `crsf_reader.py`).
 
 ## Known caveats
 
